@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import time
 from flask import url_for
@@ -9,7 +9,7 @@ import re
 sleep_time_for_fetch_thread = 3
 
 
-def test_share_watch(client, live_server):
+def test_share_watch(client, live_server, measure_memory_usage):
     set_original_response()
     live_server_setup(live_server)
 
@@ -29,7 +29,7 @@ def test_share_watch(client, live_server):
     # Add our URL to the import page
     res = client.post(
         url_for("edit_page", uuid="first"),
-        data={"include_filters": include_filters, "url": test_url, "tag": "", "headers": "", 'fetch_backend': "html_requests"},
+        data={"include_filters": include_filters, "url": test_url, "tags": "", "headers": "", 'fetch_backend': "html_requests"},
         follow_redirects=True
     )
     assert b"Updated watch." in res.data
