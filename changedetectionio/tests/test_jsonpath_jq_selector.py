@@ -1,9 +1,9 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # coding=utf-8
 
 import time
 from flask import url_for, escape
-from . util import live_server_setup
+from . util import live_server_setup, wait_for_all_checks
 import pytest
 jq_support = True
 
@@ -41,19 +41,26 @@ and it can also be repeated
     from .. import html_tools
 
     # See that we can find the second <script> one, which is not broken, and matches our filter
-    text = html_tools.extract_json_as_string(content, "json:$.offers.price")
-    assert text == "23.5"
+    text = html_tools.extract_json_as_string(content, "json:$.offers.priceCurrency")
+    assert text == '"AUD"'
+
+    text = html_tools.extract_json_as_string('{"id":5}', "json:$.id")
+    assert text == "5"
 
     # also check for jq
     if jq_support:
-        text = html_tools.extract_json_as_string(content, "jq:.offers.price")
-        assert text == "23.5"
+        text = html_tools.extract_json_as_string(content, "jq:.offers.priceCurrency")
+        assert text == '"AUD"'
 
         text = html_tools.extract_json_as_string('{"id":5}', "jq:.id")
         assert text == "5"
 
-    text = html_tools.extract_json_as_string('{"id":5}', "json:$.id")
-    assert text == "5"
+        text = html_tools.extract_json_as_string(content, "jqraw:.offers.priceCurrency")
+        assert text == "AUD"
+
+        text = html_tools.extract_json_as_string('{"id":5}', "jqraw:.id")
+        assert text == "5"
+
 
     # When nothing at all is found, it should throw JSONNOTFound
     # Which is caught and shown to the user in the watch-overview table
@@ -63,6 +70,27 @@ and it can also be repeated
     if jq_support:
         with pytest.raises(html_tools.JSONNotFound) as e_info:
             html_tools.extract_json_as_string('COMPLETE GIBBERISH, NO JSON!', "jq:.id")
+
+        with pytest.raises(html_tools.JSONNotFound) as e_info:
+            html_tools.extract_json_as_string('COMPLETE GIBBERISH, NO JSON!', "jqraw:.id")
+
+
+def test_unittest_inline_extract_body():
+    content = """
+    <html>
+        <head></head>
+        <body>
+            <pre style="word-wrap: break-word; white-space: pre-wrap;">
+                {"testKey": 42}
+            </pre>
+        </body>
+    </html>
+    """
+    from .. import html_tools
+
+    # See that we can find the second <script> one, which is not broken, and matches our filter
+    text = html_tools.extract_json_as_string(content, "json:$.testKey")
+    assert text == '42'
 
 def set_original_ext_response():
     data = """
@@ -173,7 +201,7 @@ def set_modified_response():
 
     return None
 
-def test_check_json_without_filter(client, live_server):
+def test_check_json_without_filter(client, live_server, measure_memory_usage):
     # Request a JSON document from a application/json source containing HTML
     # and be sure it doesn't get chewed up by instriptis
     set_json_response_with_html()
@@ -190,7 +218,7 @@ def test_check_json_without_filter(client, live_server):
     )
 
     # Give the thread time to pick it up
-    time.sleep(3)
+    wait_for_all_checks(client)
 
     res = client.get(
         url_for("preview_page", uuid="first"),
@@ -220,7 +248,7 @@ def check_json_filter(json_filter, client, live_server):
     assert b"1 Imported" in res.data
 
     # Give the thread time to pick it up
-    time.sleep(3)
+    wait_for_all_checks(client)
 
     # Goto the edit page, add our ignore text
     # Add our URL to the import page
@@ -228,7 +256,7 @@ def check_json_filter(json_filter, client, live_server):
         url_for("edit_page", uuid="first"),
         data={"include_filters": json_filter,
               "url": test_url,
-              "tag": "",
+              "tags": "",
               "headers": "",
               "fetch_backend": "html_requests"
               },
@@ -243,14 +271,14 @@ def check_json_filter(json_filter, client, live_server):
     assert bytes(escape(json_filter).encode('utf-8')) in res.data
 
     # Give the thread time to pick it up
-    time.sleep(3)
+    wait_for_all_checks(client)
     #  Make a change
     set_modified_response()
 
     # Trigger a check
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
     # Give the thread time to pick it up
-    time.sleep(4)
+    wait_for_all_checks(client)
 
     # It should have 'unviewed' still
     res = client.get(url_for("index"))
@@ -266,12 +294,16 @@ def check_json_filter(json_filter, client, live_server):
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data
 
-def test_check_jsonpath_filter(client, live_server):
+def test_check_jsonpath_filter(client, live_server, measure_memory_usage):
     check_json_filter('json:boss.name', client, live_server)
 
-def test_check_jq_filter(client, live_server):
+def test_check_jq_filter(client, live_server, measure_memory_usage):
     if jq_support:
         check_json_filter('jq:.boss.name', client, live_server)
+
+def test_check_jqraw_filter(client, live_server, measure_memory_usage):
+    if jq_support:
+        check_json_filter('jqraw:.boss.name', client, live_server)
 
 def check_json_filter_bool_val(json_filter, client, live_server):
     set_original_response()
@@ -288,14 +320,14 @@ def check_json_filter_bool_val(json_filter, client, live_server):
     )
     assert b"1 Imported" in res.data
 
-    time.sleep(3)
+    wait_for_all_checks(client)
     # Goto the edit page, add our ignore text
     # Add our URL to the import page
     res = client.post(
         url_for("edit_page", uuid="first"),
         data={"include_filters": json_filter,
               "url": test_url,
-              "tag": "",
+              "tags": "",
               "headers": "",
               "fetch_backend": "html_requests"
               },
@@ -304,14 +336,14 @@ def check_json_filter_bool_val(json_filter, client, live_server):
     assert b"Updated watch." in res.data
 
     # Give the thread time to pick it up
-    time.sleep(3)
+    wait_for_all_checks(client)
     #  Make a change
     set_modified_response()
 
     # Trigger a check
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
     # Give the thread time to pick it up
-    time.sleep(3)
+    wait_for_all_checks(client)
 
     res = client.get(url_for("diff_history_page", uuid="first"))
     # But the change should be there, tho its hard to test the change was detected because it will show old and new versions
@@ -320,10 +352,14 @@ def check_json_filter_bool_val(json_filter, client, live_server):
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data
 
-def test_check_jsonpath_filter_bool_val(client, live_server):
+def test_check_jsonpath_filter_bool_val(client, live_server, measure_memory_usage):
     check_json_filter_bool_val("json:$['available']", client, live_server)
 
-def test_check_jq_filter_bool_val(client, live_server):
+def test_check_jq_filter_bool_val(client, live_server, measure_memory_usage):
+    if jq_support:
+        check_json_filter_bool_val("jq:.available", client, live_server)
+
+def test_check_jqraw_filter_bool_val(client, live_server, measure_memory_usage):
     if jq_support:
         check_json_filter_bool_val("jq:.available", client, live_server)
 
@@ -348,7 +384,7 @@ def check_json_ext_filter(json_filter, client, live_server):
     assert b"1 Imported" in res.data
 
     # Give the thread time to pick it up
-    time.sleep(3)
+    wait_for_all_checks(client)
 
     # Goto the edit page, add our ignore text
     # Add our URL to the import page
@@ -356,7 +392,7 @@ def check_json_ext_filter(json_filter, client, live_server):
         url_for("edit_page", uuid="first"),
         data={"include_filters": json_filter,
               "url": test_url,
-              "tag": "",
+              "tags": "",
               "headers": "",
               "fetch_backend": "html_requests"
               },
@@ -371,14 +407,14 @@ def check_json_ext_filter(json_filter, client, live_server):
     assert bytes(escape(json_filter).encode('utf-8')) in res.data
 
     # Give the thread time to pick it up
-    time.sleep(3)
+    wait_for_all_checks(client)
     #  Make a change
     set_modified_ext_response()
 
     # Trigger a check
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
     # Give the thread time to pick it up
-    time.sleep(4)
+    wait_for_all_checks(client)
 
     # It should have 'unviewed'
     res = client.get(url_for("index"))
@@ -394,7 +430,7 @@ def check_json_ext_filter(json_filter, client, live_server):
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data
 
-def test_ignore_json_order(client, live_server):
+def test_ignore_json_order(client, live_server, measure_memory_usage):
     # A change in order shouldn't trigger a notification
 
     with open("test-datastore/endpoint-content.txt", "w") as f:
@@ -410,14 +446,14 @@ def test_ignore_json_order(client, live_server):
     )
     assert b"1 Imported" in res.data
 
-    time.sleep(2)
+    wait_for_all_checks(client)
 
     with open("test-datastore/endpoint-content.txt", "w") as f:
         f.write('{"world" : 123, "hello": 123}')
 
     # Trigger a check
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
-    time.sleep(2)
+    wait_for_all_checks(client)
 
     res = client.get(url_for("index"))
     assert b'unviewed' not in res.data
@@ -428,7 +464,7 @@ def test_ignore_json_order(client, live_server):
 
     # Trigger a check
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
-    time.sleep(2)
+    wait_for_all_checks(client)
 
     res = client.get(url_for("index"))
     assert b'unviewed' in res.data
@@ -436,9 +472,57 @@ def test_ignore_json_order(client, live_server):
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data
 
-def test_check_jsonpath_ext_filter(client, live_server):
+def test_correct_header_detect(client, live_server, measure_memory_usage):
+    # Like in https://github.com/dgtlmoon/changedetection.io/pull/1593
+    # Specify extra html that JSON is sometimes wrapped in - when using SockpuppetBrowser / Puppeteer / Playwrightetc
+    with open("test-datastore/endpoint-content.txt", "w") as f:
+        f.write('<html><body>{"hello" : 123, "world": 123}')
+
+    # Add our URL to the import page
+    # Check weird casing is cleaned up and detected also
+    test_url = url_for('test_endpoint', content_type="aPPlication/JSon", uppercase_headers=True, _external=True)
+    res = client.post(
+        url_for("import_page"),
+        data={"urls": test_url},
+        follow_redirects=True
+    )
+    assert b"1 Imported" in res.data
+    wait_for_all_checks(client)
+    res = client.get(url_for("index"))
+
+    # Fixed in #1593
+    assert b'No parsable JSON found in this document' not in res.data
+
+    res = client.get(
+        url_for("preview_page", uuid="first"),
+        follow_redirects=True
+    )
+
+    assert b'&#34;hello&#34;: 123,' in res.data
+    assert b'&#34;world&#34;: 123' in res.data
+
+    res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
+    assert b'Deleted' in res.data
+
+def test_check_jsonpath_ext_filter(client, live_server, measure_memory_usage):
     check_json_ext_filter('json:$[?(@.status==Sold)]', client, live_server)
 
-def test_check_jq_ext_filter(client, live_server):
+def test_check_jq_ext_filter(client, live_server, measure_memory_usage):
     if jq_support:
         check_json_ext_filter('jq:.[] | select(.status | contains("Sold"))', client, live_server)
+
+def test_check_jqraw_ext_filter(client, live_server, measure_memory_usage):
+    if jq_support:
+        check_json_ext_filter('jq:.[] | select(.status | contains("Sold"))', client, live_server)
+
+def test_jsonpath_BOM_utf8(client, live_server, measure_memory_usage):
+    from .. import html_tools
+
+    # JSON string with BOM and correct double-quoted keys
+    json_str = '\ufeff{"name": "José", "emoji": "😊", "language": "中文", "greeting": "Привет"}'
+
+    # See that we can find the second <script> one, which is not broken, and matches our filter
+    text = html_tools.extract_json_as_string(json_str, "json:$.name")
+    assert text == '"José"'
+
+    

@@ -1,8 +1,8 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import time
 from flask import url_for
-from . util import live_server_setup
+from .util import live_server_setup, wait_for_all_checks
 from changedetectionio import html_tools
 
 def set_original_ignore_response():
@@ -60,16 +60,13 @@ def set_modified_response_minus_block_text():
         f.write(test_return_data)
 
 
-def test_check_block_changedetection_text_NOT_present(client, live_server):
-    sleep_time_for_fetch_thread = 3
+def test_check_block_changedetection_text_NOT_present(client, live_server, measure_memory_usage):
+
     live_server_setup(live_server)
     # Use a mix of case in ZzZ to prove it works case-insensitive.
     ignore_text = "out of stoCk\r\nfoobar"
-
     set_original_ignore_response()
 
-    # Give the endpoint time to spin up
-    time.sleep(1)
 
     # Add our URL to the import page
     test_url = url_for('test_endpoint', _external=True)
@@ -81,19 +78,22 @@ def test_check_block_changedetection_text_NOT_present(client, live_server):
     assert b"1 Imported" in res.data
 
     # Give the thread time to pick it up
-    time.sleep(sleep_time_for_fetch_thread)
+    wait_for_all_checks(client)
 
     # Goto the edit page, add our ignore text
     # Add our URL to the import page
     res = client.post(
         url_for("edit_page", uuid="first"),
-        data={"text_should_not_be_present": ignore_text, "url": test_url, 'fetch_backend': "html_requests"},
+        data={"text_should_not_be_present": ignore_text,
+              "url": test_url,
+              'fetch_backend': "html_requests"
+              },
         follow_redirects=True
     )
     assert b"Updated watch." in res.data
 
     # Give the thread time to pick it up
-    time.sleep(sleep_time_for_fetch_thread)
+    wait_for_all_checks(client)
     # Check it saved
     res = client.get(
         url_for("edit_page", uuid="first"),
@@ -104,7 +104,7 @@ def test_check_block_changedetection_text_NOT_present(client, live_server):
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
 
     # Give the thread time to pick it up
-    time.sleep(sleep_time_for_fetch_thread)
+    wait_for_all_checks(client)
 
     # It should report nothing found (no new 'unviewed' class)
     res = client.get(url_for("index"))
@@ -117,21 +117,31 @@ def test_check_block_changedetection_text_NOT_present(client, live_server):
     # Trigger a check
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
     # Give the thread time to pick it up
-    time.sleep(sleep_time_for_fetch_thread)
+    wait_for_all_checks(client)
 
     # It should report nothing found (no new 'unviewed' class)
     res = client.get(url_for("index"))
     assert b'unviewed' not in res.data
     assert b'/test-endpoint' in res.data
 
+    # 2548
+    # Going back to the ORIGINAL should NOT trigger a change
+    set_original_ignore_response()
+    client.get(url_for("form_watch_checknow"), follow_redirects=True)
+    wait_for_all_checks(client)
+    res = client.get(url_for("index"))
+    assert b'unviewed' not in res.data
 
-    # Now we set a change where the text is gone, it should now trigger
+
+    # Now we set a change where the text is gone AND its different content, it should now trigger
     set_modified_response_minus_block_text()
     client.get(url_for("form_watch_checknow"), follow_redirects=True)
-    time.sleep(sleep_time_for_fetch_thread)
-
+    wait_for_all_checks(client)
     res = client.get(url_for("index"))
     assert b'unviewed' in res.data
+
+
+
 
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data

@@ -12,7 +12,7 @@ window.addEventListener('hashchange', function () {
 var has_errors = document.querySelectorAll(".messages .error");
 if (!has_errors.length) {
     if (document.location.hash == "") {
-        document.querySelector(".tabs ul li:first-child a").click();
+        location.replace(document.querySelector(".tabs ul li:first-child a").hash);
     } else {
         set_active_tab();
     }
@@ -26,8 +26,7 @@ function set_active_tab() {
     if (tab.length) {
         tab[0].parentElement.className = "active";
     }
-    // hash could move the page down
-    window.scrollTo(0, 0);
+
 }
 
 function focus_error_tab() {

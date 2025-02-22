@@ -1,8 +1,8 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import time
 from flask import url_for
-from .util import live_server_setup, extract_api_key_from_UI
+from .util import live_server_setup, extract_api_key_from_UI, wait_for_all_checks
 
 import json
 import uuid
@@ -44,7 +44,6 @@ def set_modified_response():
 
     return None
 
-
 def is_valid_uuid(val):
     try:
         uuid.UUID(str(val))
@@ -53,10 +52,12 @@ def is_valid_uuid(val):
         return False
 
 
-def test_setup(client, live_server):
+def test_setup(client, live_server, measure_memory_usage):
     live_server_setup(live_server)
 
-def test_api_simple(client, live_server):
+
+def test_api_simple(client, live_server, measure_memory_usage):
+#    live_server_setup(live_server)
 
     api_key = extract_api_key_from_UI(client)
 
@@ -86,7 +87,7 @@ def test_api_simple(client, live_server):
     watch_uuid = res.json.get('uuid')
     assert res.status_code == 201
 
-    time.sleep(3)
+    wait_for_all_checks(client)
 
     # Verify its in the list and that recheck worked
     res = client.get(
@@ -95,7 +96,9 @@ def test_api_simple(client, live_server):
     )
     assert watch_uuid in res.json.keys()
     before_recheck_info = res.json[watch_uuid]
+
     assert before_recheck_info['last_checked'] != 0
+
     #705 `last_changed` should be zero on the first check
     assert before_recheck_info['last_changed'] == 0
     assert before_recheck_info['title'] == 'My test URL'
@@ -107,7 +110,7 @@ def test_api_simple(client, live_server):
     )
     assert len(res.json) == 0
 
-    time.sleep(2)
+    wait_for_all_checks(client)
 
     set_modified_response()
     # Trigger recheck of all ?recheck_all=1
@@ -115,7 +118,7 @@ def test_api_simple(client, live_server):
         url_for("createwatch", recheck_all='1'),
         headers={'x-api-key': api_key},
     )
-    time.sleep(3)
+    wait_for_all_checks(client)
 
     # Did the recheck fire?
     res = client.get(
@@ -125,6 +128,9 @@ def test_api_simple(client, live_server):
     after_recheck_info = res.json[watch_uuid]
     assert after_recheck_info['last_checked'] != before_recheck_info['last_checked']
     assert after_recheck_info['last_changed'] != 0
+
+    # #2877 When run in a slow fetcher like playwright etc
+    assert after_recheck_info['last_changed'] ==  after_recheck_info['last_checked']
 
     # Check history index list
     res = client.get(
@@ -146,6 +152,15 @@ def test_api_simple(client, live_server):
         headers={'x-api-key': api_key},
     )
     assert b'which has this one new line' in res.data
+    assert b'<div id' not in res.data
+
+    # Fetch the HTML of the latest one
+    res = client.get(
+        url_for("watchsinglehistory", uuid=watch_uuid, timestamp='latest')+"?html=1",
+        headers={'x-api-key': api_key},
+    )
+    assert b'which has this one new line' in res.data
+    assert b'<div id' in res.data
 
     # Fetch the whole watch
     res = client.get(
@@ -155,6 +170,19 @@ def test_api_simple(client, live_server):
     watch = res.json
     # @todo how to handle None/default global values?
     assert watch['history_n'] == 2, "Found replacement history section, which is in its own API"
+
+    assert watch.get('viewed') == False
+    # Loading the most recent snapshot should force viewed to become true
+    client.get(url_for("diff_history_page", uuid="first"), follow_redirects=True)
+
+    time.sleep(3)
+    # Fetch the whole watch again, viewed should be true
+    res = client.get(
+        url_for("watch", uuid=watch_uuid),
+        headers={'x-api-key': api_key}
+    )
+    watch = res.json
+    assert watch.get('viewed') == True
 
     # basic systeminfo check
     res = client.get(
@@ -216,7 +244,7 @@ def test_api_simple(client, live_server):
     )
     assert len(res.json) == 0, "Watch list should be empty"
 
-def test_access_denied(client, live_server):
+def test_access_denied(client, live_server, measure_memory_usage):
     # `config_api_token_enabled` Should be On by default
     res = client.get(
         url_for("createwatch")
@@ -262,11 +290,11 @@ def test_access_denied(client, live_server):
     )
     assert b"Settings updated." in res.data
 
-def test_api_watch_PUT_update(client, live_server):
+def test_api_watch_PUT_update(client, live_server, measure_memory_usage):
 
     #live_server_setup(live_server)
     api_key = extract_api_key_from_UI(client)
-    time.sleep(1)
+
     # Create a watch
     set_original_response()
     test_url = url_for('test_endpoint', _external=True,
@@ -282,7 +310,6 @@ def test_api_watch_PUT_update(client, live_server):
 
     assert res.status_code == 201
 
-    time.sleep(1)
 
     # Get a listing, it will be the first one
     res = client.get(
@@ -297,6 +324,8 @@ def test_api_watch_PUT_update(client, live_server):
         url_for("edit_page", uuid=watch_uuid),
     )
     assert b"cookie: yum" in res.data, "'cookie: yum' found in 'headers' section"
+    assert b"One" in res.data, "Tag 'One' was found"
+    assert b"Two" in res.data, "Tag 'Two' was found"
 
     # HTTP PUT ( UPDATE an existing watch )
     res = client.put(
@@ -319,7 +348,8 @@ def test_api_watch_PUT_update(client, live_server):
     )
     assert b"new title" in res.data, "new title found in edit page"
     assert b"552" in res.data, "552 minutes found in edit page"
-    assert b"One, Two" in res.data, "Tag 'One, Two' was found"
+    assert b"One" in res.data, "Tag 'One' was found"
+    assert b"Two" in res.data, "Tag 'Two' was found"
     assert b"cookie: all eaten" in res.data, "'cookie: all eaten' found in 'headers' section"
 
     ######################################################
@@ -340,3 +370,25 @@ def test_api_watch_PUT_update(client, live_server):
     # Cleanup everything
     res = client.get(url_for("form_delete", uuid="all"), follow_redirects=True)
     assert b'Deleted' in res.data
+
+
+def test_api_import(client, live_server, measure_memory_usage):
+    api_key = extract_api_key_from_UI(client)
+
+    res = client.post(
+        url_for("import") + "?tag=import-test",
+        data='https://website1.com\r\nhttps://website2.com',
+        headers={'x-api-key': api_key},
+        follow_redirects=True
+    )
+
+    assert res.status_code == 200
+    assert len(res.json) == 2
+    res = client.get(url_for("index"))
+    assert b"https://website1.com" in res.data
+    assert b"https://website2.com" in res.data
+
+    # Should see the new tag in the tag/groups list
+    res = client.get(url_for('tags.tags_overview_page'))
+    assert b'import-test' in res.data
+    

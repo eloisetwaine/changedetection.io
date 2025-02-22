@@ -1,4 +1,4 @@
-from . util import live_server_setup, extract_UUID_from_client
+from .util import live_server_setup, extract_UUID_from_client, wait_for_all_checks
 from flask import url_for
 import time
 
@@ -19,10 +19,16 @@ def test_check_access_control(app, client, live_server):
         )
 
         assert b"1 Imported" in res.data
-        time.sleep(2)
-        res = client.get(url_for("form_watch_checknow"), follow_redirects=True)
+        time.sleep(3)
+        # causes a 'Popped wrong request context.' error when client. is accessed?
+        #wait_for_all_checks(client)
+
+        res = c.get(url_for("form_watch_checknow"), follow_redirects=True)
         assert b'1 watches queued for rechecking.' in res.data
-        time.sleep(2)
+        time.sleep(3)
+        # causes a 'Popped wrong request context.' error when client. is accessed?
+        #wait_for_all_checks(client)
+
 
         # Enable password check and diff page access bypass
         res = c.post(
@@ -42,9 +48,18 @@ def test_check_access_control(app, client, live_server):
         assert b"Login" in res.data
 
         # The diff page should return something valid when logged out
-        res = client.get(url_for("diff_history_page", uuid="first"))
+        res = c.get(url_for("diff_history_page", uuid="first"))
         assert b'Random content' in res.data
 
+        # Check wrong password does not let us in
+        res = c.post(
+            url_for("login"),
+            data={"password": "WRONG PASSWORD"},
+            follow_redirects=True
+        )
+
+        assert b"LOG OUT" not in res.data
+        assert b"Incorrect password" in res.data
 
 
         # Menu should not be available yet
@@ -73,6 +88,8 @@ def test_check_access_control(app, client, live_server):
 
         res = c.get(url_for("logout"),
             follow_redirects=True)
+
+        assert b"Login" in res.data
 
         res = c.get(url_for("settings_page"),
             follow_redirects=True)
@@ -151,5 +168,5 @@ def test_check_access_control(app, client, live_server):
         assert b"Login" in res.data
 
         # The diff page should return something valid when logged out
-        res = client.get(url_for("diff_history_page", uuid="first"))
+        res = c.get(url_for("diff_history_page", uuid="first"))
         assert b'Random content' not in res.data
